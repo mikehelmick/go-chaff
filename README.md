@@ -1,7 +1,7 @@
 # Go Chaff Tracker / Generator
 
 [![GoDoc](https://img.shields.io/badge/go-documentation-blue.svg?style=flat-square)](https://pkg.go.dev/github.com/mikehelmick/go-chaff)
-![Go](https://github.com/mikehelmick/go-chaff/workflows/Go/badge.svg?event=push)
+[![Go](https://github.com/mikehelmick/go-chaff/actions?query=workflow%3AGo)](https://github.com/mikehelmick/go-chaff/workflows/Go/badge.svg?event=push)
 
 This package provides the necessary tools to allow for your server to handle
 chaff requests from clients. This technique can be used when you want to guard

@@ -11,6 +11,8 @@ github.com/mdempsky/maligned v0.0.0-20180708014732-6e39bd26a8c8/go.mod h1:oGVD62
 github.com/mibk/dupl v1.0.0/go.mod h1:pCr4pNxxIbFGvtyCOi0c7LVjmV6duhKWV+ex5vh38ME=
 github.com/mikehelmick/go-chaff v0.0.0-20200713054231-5c5849577e75 h1:dMhZcxEJyVHXd9wH3JWyQ5Xw07Sjjy9IbcFIRwsEWEs=
 github.com/mikehelmick/go-chaff v0.0.0-20200713054231-5c5849577e75/go.mod h1:oXs/eMe0eaFbMhm3Jq2da1hYApeg8mwRJP1xDFHIub0=
+github.com/mikehelmick/go-chaff v0.1.2 h1:fEGAuffe6L5OefdWgzEkwNK5pHD9WQVFAifGQSkdmVY=
+github.com/mikehelmick/go-chaff v0.1.2/go.mod h1:mFry3zNW17oxNGmZpQV3PEOmzTNyly3nLDYawCT/iCE=
 github.com/opennota/check v0.0.0-20180911053232-0c771f5545ff/go.mod h1:tydB+MZxWpY8M/NRu7jQhND/mXuLAPsKcSV6JkzofsA=
 github.com/tsenart/deadcode v0.0.0-20160724212837-210d2dc333e9/go.mod h1:q+QjxYvZ+fpjMXqs+XEriussHjSYqeXVnAdSV1tkMYk=
 github.com/yuin/goldmark v1.1.32/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=

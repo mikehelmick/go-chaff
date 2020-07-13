@@ -171,8 +171,8 @@ func (t *Tracker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (t *Tracker) Track(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func (t *Tracker) Track(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		memWriter := httptest.NewRecorder()
 		next.ServeHTTP(memWriter, r)
@@ -198,5 +198,5 @@ func (t *Tracker) Track(next http.HandlerFunc) http.HandlerFunc {
 		case t.ch <- newRequest(start, end, headerSize, bodySize):
 		default: // channel full, drop request.
 		}
-	}
+	})
 }

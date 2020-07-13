@@ -85,12 +85,12 @@ func TestTracking(t *testing.T) {
 
 	for i := 0; i <= DefaultCapacity*2; i++ {
 		wrapped := track.Track(
-			func(w http.ResponseWriter, r *http.Request) {
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				time.Sleep(1 * time.Millisecond)
 				w.WriteHeader(http.StatusAccepted)
 				w.Header().Add("padding", strings.Repeat("a", i+1))
 				w.Write([]byte(strings.Repeat("b", i+1)))
-			})
+			}))
 
 		recorder := httptest.NewRecorder()
 		request, err := http.NewRequest("GET", "/", strings.NewReader(""))

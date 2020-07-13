@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"time"
 )
@@ -171,31 +170,41 @@ func (t *Tracker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type writeThrough struct {
+	size int
+	w    http.ResponseWriter
+}
+
+func (wt *writeThrough) Header() http.Header {
+	return wt.w.Header()
+}
+
+func (wt *writeThrough) Write(b []byte) (int, error) {
+	wt.size += len(b)
+	return wt.w.Write(b)
+}
+
+func (wt *writeThrough) WriteHeader(statusCode int) {
+	wt.w.WriteHeader(statusCode)
+}
+
 func (t *Tracker) Track(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		memWriter := httptest.NewRecorder()
-		next.ServeHTTP(memWriter, r)
+		proxyWriter := &writeThrough{w: w}
+		next.ServeHTTP(proxyWriter, r)
 		end := time.Now()
 
-		// maybe write the status code upstream.
-		if memWriter.Code != 0 {
-			w.WriteHeader(memWriter.Code)
-		}
-		// rewrite the headers to the actual response.
+		// grab the size of the headers that are present.
 		headerSize := 0
-		for k, vals := range memWriter.HeaderMap {
+		for k, vals := range w.Header() {
 			headerSize += len(k)
 			for _, v := range vals {
 				headerSize += len(v)
-				w.Header().Add(k, v)
 			}
 		}
-		// rewrite the body.
-		bodySize := memWriter.Body.Len()
-		w.Write(memWriter.Body.Bytes())
 		select {
-		case t.ch <- newRequest(start, end, headerSize, bodySize):
+		case t.ch <- newRequest(start, end, headerSize, proxyWriter.size):
 		default: // channel full, drop request.
 		}
 	})

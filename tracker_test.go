@@ -24,10 +24,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func handler(w http.ResponseWriter, r *http.Request) {
-
-}
-
 func checkLength(t *testing.T, expected int, length int) {
 	t.Helper()
 	lower := float64(expected) * 0.99

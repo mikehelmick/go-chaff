@@ -176,9 +176,12 @@ func (t *Tracker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Normalize the latency.
+	t.normalizeLatnecy(start, details.latencyMs)
+}
+
+func (t *Tracker) normalizeLatnecy(start time.Time, targetMs int64) {
 	elapsed := time.Now().Sub(start)
-	if rem := details.latencyMs - elapsed.Milliseconds(); rem > 0 {
+	if rem := targetMs - elapsed.Milliseconds(); rem > 0 {
 		time.Sleep(time.Duration(rem) * time.Millisecond)
 	}
 }

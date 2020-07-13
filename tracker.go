@@ -35,6 +35,10 @@ const (
 //
 // It also implements http.Handler and can be used to server the chaff request
 // handler.
+//
+// Response details are sent through a buffered channel. If the channel is full
+// (i.e. this library is falling behind or requests volumes are too large),
+// then some individual requests will be dropped.
 type Tracker struct {
 	mu     sync.RWMutex
 	buffer []*request
@@ -85,6 +89,7 @@ func NewTracker(cap int) (*Tracker, error) {
 	return t, nil
 }
 
+// recordRequest actually puts a request in the circular buffer.
 func (t *Tracker) recordRequest(record *request) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -98,6 +103,8 @@ func (t *Tracker) recordRequest(record *request) {
 	t.pos = (t.pos + 1) % t.cap
 }
 
+// updater is the go routine that is launched to pull requst details from
+// the request channel.
 func (t *Tracker) updater() {
 	for {
 		select {
@@ -109,12 +116,15 @@ func (t *Tracker) updater() {
 	}
 }
 
+// Close will stop the updating goroutine and closes all channels.
 func (t *Tracker) Close() {
 	t.done <- struct{}{}
 	close(t.ch)
 	close(t.done)
 }
 
+// CalculateProfile takes a read lock over the source data and
+// returns the current average latency and request sizes.
 func (t *Tracker) CalculateProfile() *request {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -148,6 +158,9 @@ func randomData(size int) string {
 	return base64.StdEncoding.EncodeToString(buffer)
 }
 
+// ServerHTTP is the chaff request handler. Based on the current request profile
+// the requst will be held for a certian period of time and then return
+// approximate size random data.
 func (t *Tracker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	details := t.CalculateProfile()
@@ -170,6 +183,8 @@ func (t *Tracker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// write through wraps an http.ResponseWriter so that we can count the
+// number of bytes that are written by the delegate handler.
 type writeThrough struct {
 	size int
 	w    http.ResponseWriter
@@ -188,6 +203,7 @@ func (wt *writeThrough) WriteHeader(statusCode int) {
 	wt.w.WriteHeader(statusCode)
 }
 
+// Track provides the necessary http middleware function.
 func (t *Tracker) Track(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

@@ -50,14 +50,14 @@ type Tracker struct {
 }
 
 type request struct {
-	latencyMs  int64
-	bodySize   int
-	headerSize int
+	latencyMs  uint64
+	bodySize   uint64
+	headerSize uint64
 }
 
-func newRequest(start, end time.Time, headerSize, bodySize int) *request {
+func newRequest(start, end time.Time, headerSize, bodySize uint64) *request {
 	return &request{
-		latencyMs:  end.Sub(start).Milliseconds(),
+		latencyMs:  uint64(end.Sub(start).Milliseconds()),
 		headerSize: headerSize,
 		bodySize:   bodySize,
 	}
@@ -133,21 +133,22 @@ func (t *Tracker) CalculateProfile() *request {
 		return &request{}
 	}
 
-	var latency, hSize, bSize int64
+	var latency, hSize, bSize uint64
 	for _, r := range t.buffer {
 		latency += r.latencyMs
-		hSize += int64(r.headerSize)
-		bSize += int64(r.bodySize)
+		hSize += uint64(r.headerSize)
+		bSize += uint64(r.bodySize)
 	}
-	divisor := int64(t.size)
+	divisor := uint64(t.size)
+
 	return &request{
 		latencyMs:  latency / divisor,
-		headerSize: int(hSize / divisor),
-		bodySize:   int(bSize / divisor),
+		headerSize: uint64(hSize / divisor),
+		bodySize:   uint64(bSize / divisor),
 	}
 }
 
-func randomData(size int) string {
+func randomData(size uint64) string {
 	// Account for base64 overhead
 	size = 3 * size / 4
 	buffer := make([]byte, size)
@@ -186,10 +187,10 @@ func (t *Tracker) normalizeLatnecy(start time.Time, targetMs int64) {
 	}
 }
 
-// write through wraps an http.ResponseWriter so that we can count the
-// number of bytes that are written by the delegate handler.
+// write through wraps an http.ResponseWriter so that we can count the number of
+// bytes that are written by the delegate handler.
 type writeThrough struct {
-	size int
+	size uint64
 	w    http.ResponseWriter
 }
 
@@ -198,7 +199,7 @@ func (wt *writeThrough) Header() http.Header {
 }
 
 func (wt *writeThrough) Write(b []byte) (int, error) {
-	wt.size += len(b)
+	atomic.AddUint64(&wt.size, uint64(len(b)))
 	return wt.w.Write(b)
 }
 
@@ -227,4 +228,6 @@ func (t *Tracker) Track(next http.Handler) http.Handler {
 		default: // channel full, drop request.
 		}
 	})
+func (wt *writeThrough) Size() uint64 {
+	return atomic.LoadUint64(&wt.size)
 }

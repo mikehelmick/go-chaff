@@ -58,10 +58,10 @@ func TestJSONChaff(t *testing.T) {
 		t.Errorf("wrong code, want: %v, got: %v", http.StatusOK, w.Code)
 	}
 
-	if header, ok := w.HeaderMap[Header]; !ok {
+	if header := w.Header().Get(Header); header == "" {
 		t.Errorf("expected header '%v' missing", Header)
 	} else {
-		checkLength(t, 100, len(header[0]))
+		checkLength(t, 100, len(header))
 	}
 
 	var response Example

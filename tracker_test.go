@@ -15,6 +15,7 @@
 package chaff
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,10 +60,10 @@ func TestChaff(t *testing.T) {
 		t.Errorf("wrong code, want: %v, got: %v", http.StatusOK, w.Code)
 	}
 
-	if header, ok := w.HeaderMap[Header]; !ok {
+	if header := w.Header().Get(Header); header == "" {
 		t.Errorf("expected header '%v' missing", Header)
 	} else {
-		checkLength(t, 100, len(header[0]))
+		checkLength(t, 100, len(header))
 	}
 	checkLength(t, 250, len(w.Body.Bytes()))
 }
@@ -85,7 +86,7 @@ func TestTracking(t *testing.T) {
 				time.Sleep(1 * time.Millisecond)
 				w.WriteHeader(http.StatusAccepted)
 				w.Header().Add("padding", strings.Repeat("a", i+1))
-				w.Write([]byte(strings.Repeat("b", i+1)))
+				fmt.Fprintf(w, "%s", strings.Repeat("b", i+1))
 			}))
 
 		recorder := httptest.NewRecorder()

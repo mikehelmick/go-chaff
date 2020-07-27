@@ -21,6 +21,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -159,30 +160,78 @@ func randomData(size uint64) string {
 	return base64.StdEncoding.EncodeToString(buffer)
 }
 
-// ServerHTTP is the chaff request handler. Based on the current request profile
-// the requst will be held for a certian period of time and then return
-// approximate size random data.
+// ServeHTTP implements http.Handler. See HandleChaff for more details.
 func (t *Tracker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	details := t.CalculateProfile()
-
-	w.WriteHeader(http.StatusOK)
-	// Generate the response details.
-	if details.headerSize > 0 {
-		w.Header().Add(Header, randomData(details.headerSize))
-	}
-	if details.bodySize > 0 {
-		if _, err := w.Write([]byte(randomData(details.bodySize))); err != nil {
-			log.Printf("chaff request failed to write: %v", err)
-		}
-	}
-
-	t.normalizeLatnecy(start, details.latencyMs)
+	t.HandleChaff().ServeHTTP(w, r)
 }
 
-func (t *Tracker) normalizeLatnecy(start time.Time, targetMs int64) {
-	elapsed := time.Now().Sub(start)
-	if rem := targetMs - elapsed.Milliseconds(); rem > 0 {
+// HandleChaff is the chaff request handler. Based on the current request
+// profile the requst will be held for a certian period of time and then return
+// approximate size random data.
+func (t *Tracker) HandleChaff() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		details := t.CalculateProfile()
+
+		w.WriteHeader(http.StatusOK)
+		// Generate the response details.
+		if details.headerSize > 0 {
+			w.Header().Add(Header, randomData(details.headerSize))
+		}
+		if details.bodySize > 0 {
+			if _, err := w.Write([]byte(randomData(details.bodySize))); err != nil {
+				log.Printf("chaff request failed to write: %v", err)
+			}
+		}
+
+		t.normalizeLatnecy(start, details.latencyMs)
+	})
+}
+
+// Track wraps a http handler and collects metrics about the request for
+// replaying later during a chaff response. It's suitable for use as a
+// middleware function in common Go web frameworks.
+func (t *Tracker) Track(next http.Handler) http.Handler {
+	return t.HandleTrack(nil, next)
+}
+
+// HandleTrack wraps the given http handler and detector. If the request is
+// deemed to be chaff (as determined by the Detector), the system sends a chaff
+// response. Otherwise it returns the real response and adds it to the tracker.
+func (t *Tracker) HandleTrack(d Detector, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if d != nil && d.IsChaff(r) {
+			// Send chaff response
+			t.HandleChaff().ServeHTTP(w, r)
+			return
+		}
+
+		// Handle the real request, gathering metadata
+		start := time.Now()
+		proxyWriter := &writeThrough{w: w}
+		next.ServeHTTP(proxyWriter, r)
+		end := time.Now()
+
+		// Grab the size of the headers that are present.
+		var headerSize uint64
+		for k, vals := range w.Header() {
+			headerSize += uint64(len(k))
+			for _, v := range vals {
+				headerSize += uint64(len(v))
+			}
+		}
+
+		// Save metadata
+		select {
+		case t.ch <- newRequest(start, end, headerSize, proxyWriter.Size()):
+		default: // channel full, drop request.
+		}
+	})
+}
+
+func (t *Tracker) normalizeLatnecy(start time.Time, targetMs uint64) {
+	elapsed := time.Since(start)
+	if rem := targetMs - uint64(elapsed.Milliseconds()); rem > 0 {
 		time.Sleep(time.Duration(rem) * time.Millisecond)
 	}
 }
@@ -207,27 +256,6 @@ func (wt *writeThrough) WriteHeader(statusCode int) {
 	wt.w.WriteHeader(statusCode)
 }
 
-// Track provides the necessary http middleware function.
-func (t *Tracker) Track(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		proxyWriter := &writeThrough{w: w}
-		next.ServeHTTP(proxyWriter, r)
-		end := time.Now()
-
-		// grab the size of the headers that are present.
-		headerSize := 0
-		for k, vals := range w.Header() {
-			headerSize += len(k)
-			for _, v := range vals {
-				headerSize += len(v)
-			}
-		}
-		select {
-		case t.ch <- newRequest(start, end, headerSize, proxyWriter.size):
-		default: // channel full, drop request.
-		}
-	})
 func (wt *writeThrough) Size() uint64 {
 	return atomic.LoadUint64(&wt.size)
 }

@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-// ProduceJSONFn
+// ProduceJSONFn is a function for producing JSON responses.
 type ProduceJSONFn func(string) interface{}
 
 // JSONResponse is an HTTP handler that can wrap a tracker and response with
@@ -56,7 +56,7 @@ func (j *JSONResponse) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Printf("error: unable to marshal chaff JSON response: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(fmt.Sprintf("{\"error\": \"%v\"}", err.Error())))
+			fmt.Fprintf(w, "{\"error\": \"%v\"}", err.Error())
 			return
 		}
 	}
@@ -67,7 +67,7 @@ func (j *JSONResponse) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add(Header, randomData(details.headerSize))
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(bodyData)
+	fmt.Fprintf(w, "%s", bodyData)
 
 	j.t.normalizeLatnecy(start, details.latencyMs)
 }

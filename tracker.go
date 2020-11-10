@@ -30,6 +30,14 @@ const (
 	DefaultCapacity = 100
 )
 
+type chaffHandler interface {
+	HandleChaff() http.Handler
+	queueRequest(*request)
+	Close()
+	CalculateProfile() *request
+	Track(next http.Handler) http.Handler
+}
+
 // Tracker represents the status of a latency and request size tracker.
 // It contains middleware that can be injected to automate keeping a rolling
 // history of requests.
@@ -188,6 +196,14 @@ func (t *Tracker) HandleChaff() http.Handler {
 	})
 }
 
+// queueRequest queues up a request for the Tracker.
+func (t *Tracker) queueRequest(r *request) {
+	select {
+	case t.ch <- r:
+	default: // channel full, drop request.
+	}
+}
+
 // Track wraps a http handler and collects metrics about the request for
 // replaying later during a chaff response. It's suitable for use as a
 // middleware function in common Go web frameworks.
@@ -199,6 +215,13 @@ func (t *Tracker) Track(next http.Handler) http.Handler {
 // deemed to be chaff (as determined by the Detector), the system sends a chaff
 // response. Otherwise it returns the real response and adds it to the tracker.
 func (t *Tracker) HandleTrack(d Detector, next http.Handler) http.Handler {
+	return handleTrack(t, d, next)
+}
+
+// handleTrack wraps the given http handler and detector. If the request is
+// deemed to be chaff (as determined by the Detector), the system sends a chaff
+// response. Otherwise it returns the real response and adds it to the tracker.
+func handleTrack(t chaffHandler, d Detector, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if d != nil && d.IsChaff(r) {
 			// Send chaff response
@@ -222,10 +245,7 @@ func (t *Tracker) HandleTrack(d Detector, next http.Handler) http.Handler {
 		}
 
 		// Save metadata
-		select {
-		case t.ch <- newRequest(start, end, headerSize, proxyWriter.Size()):
-		default: // channel full, drop request.
-		}
+		t.queueRequest(newRequest(start, end, headerSize, proxyWriter.Size()))
 	})
 }
 

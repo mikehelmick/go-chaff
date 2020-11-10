@@ -36,10 +36,17 @@ type JSONResponse struct {
 	fn ProduceJSONFn
 }
 
+// NewJSON returns a new JSONResponse, with defaults.
+func NewJSON(fn ProduceJSONFn) *JSONResponse {
+	return NewJSONResponse(New(), fn)
+}
+
 // NewJSONResponse creates a new JSON responder
 // Requres a ProduceJSONFn that will be given the random data payload
 // and is responsible for putting it into a struct that can be marshalled
 // as the JSON response.
+//
+// Note, Closing the Tracker is handled by JSONResponse.Close.
 func NewJSONResponse(t *Tracker, fn ProduceJSONFn) *JSONResponse {
 	return &JSONResponse{t, fn}
 }
@@ -70,4 +77,43 @@ func (j *JSONResponse) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "%s", bodyData)
 
 	j.t.normalizeLatnecy(start, details.latencyMs)
+}
+
+// HandleTrack wraps the given http handler and detector. If the request is
+// deemed to be chaff (as determined by the Detector), the system sends a chaff
+// response. Otherwise it returns the real response and adds it to the tracker.
+func (j *JSONResponse) HandleTrack(d Detector, next http.Handler) http.Handler {
+	return handleTrack(j, d, next)
+}
+
+// HandleChaff is the chaff request handler. Based on the current request
+// profile the requst will be held for a certian period of time and then return
+// approximate size random data.
+func (j *JSONResponse) HandleChaff() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		j.ServeHTTP(w, r)
+	})
+}
+
+// queueRequest handles a request for a JSONResponse.
+func (j *JSONResponse) queueRequest(r *request) {
+	j.t.queueRequest(r)
+}
+
+// Close cleans up a JSONResponse.
+func (j *JSONResponse) Close() {
+	j.t.Close()
+}
+
+// CalculateProfile takes a read lock over the source data and
+// returns the current average latency and request sizes.
+func (j *JSONResponse) CalculateProfile() *request {
+	return j.t.CalculateProfile()
+}
+
+// Track wraps a http handler and collects metrics about the request for
+// replaying later during a chaff response. It's suitable for use as a
+// middleware function in common Go web frameworks.
+func (j *JSONResponse) Track(next http.Handler) http.Handler {
+	return j.t.Track(next)
 }

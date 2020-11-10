@@ -69,44 +69,52 @@ func TestChaff(t *testing.T) {
 }
 
 func TestTracking(t *testing.T) {
-	track := New()
-	defer track.Close()
+	type json struct {
+		Name string `json:"name"`
+	}
+	jsonWriter := func(s string) interface{} { return json{Name: s} }
 
-	{
+	tests := []chaffHandler{
+		New(),
+		NewJSON(jsonWriter),
+	}
+
+	for _, track := range tests {
+		defer track.Close()
 		want := &request{}
 		got := track.CalculateProfile()
 		if diff := cmp.Diff(want, got, cmp.AllowUnexported(request{})); diff != "" {
 			t.Errorf("mismatch (-want, +got):\n%s", diff)
 		}
-	}
 
-	for i := 0; i <= DefaultCapacity*2; i++ {
-		wrapped := track.Track(
-			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				time.Sleep(1 * time.Millisecond)
-				w.WriteHeader(http.StatusAccepted)
-				w.Header().Add("padding", strings.Repeat("a", i+1))
-				fmt.Fprintf(w, "%s", strings.Repeat("b", i+1))
-			}))
+		for i := 0; i <= DefaultCapacity*2; i++ {
+			wrapped := track.Track(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					time.Sleep(1 * time.Millisecond)
+					w.WriteHeader(http.StatusAccepted)
+					w.Header().Add("padding", strings.Repeat("a", i+1))
+					fmt.Fprintf(w, "%s", strings.Repeat("b", i+1))
+				}))
 
-		recorder := httptest.NewRecorder()
-		request, err := http.NewRequest("GET", "/", strings.NewReader(""))
-		if err != nil {
-			t.Fatalf("http.NewRequest: %v", err)
+			recorder := httptest.NewRecorder()
+			request, err := http.NewRequest("GET", "/", strings.NewReader(""))
+			if err != nil {
+				t.Fatalf("http.NewRequest: %v", err)
+			}
+
+			wrapped.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusAccepted {
+				t.Fatalf("wrong error code: want: %v, got: %v", http.StatusAccepted, recorder.Code)
+			}
 		}
 
-		wrapped.ServeHTTP(recorder, request)
-		if recorder.Code != http.StatusAccepted {
-			t.Fatalf("wrong error code: want: %v, got: %v", http.StatusAccepted, recorder.Code)
+		gotProf := track.CalculateProfile()
+		// requests are fast enough that 1ms is reasonable.
+		// sum(101:200)/100 -> 150
+		// for header there is an extra 7 bytes for header name
+		wantProf := &request{1, 150, 157}
+		if diff := cmp.Diff(wantProf, gotProf, cmp.AllowUnexported(request{})); diff != "" {
+			t.Errorf("mismatch (-wantProf, +gotProf):\n%s", diff)
 		}
-	}
-
-	got := track.CalculateProfile()
-	// requests are fast enough that 1ms is reasonable.
-	// sum(101:200)/100 -> 150
-	// for header there is an extra 7 bytes for header name
-	want := &request{1, 150, 157}
-	if diff := cmp.Diff(want, got, cmp.AllowUnexported(request{})); diff != "" {
-		t.Errorf("mismatch (-want, +got):\n%s", diff)
 	}
 }

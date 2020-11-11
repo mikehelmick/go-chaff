@@ -44,10 +44,10 @@ func TestJSONChaff(t *testing.T) {
 		t.Fatalf("http.NewRequest: %v", err)
 	}
 
-	handler := NewJSONResponse(track, produceExample)
+	responder := NewJSONResponder(produceExample)
 
 	before := time.Now()
-	handler.ServeHTTP(w, r)
+	track.ChaffHandler(responder).ServeHTTP(w, r)
 	after := time.Now()
 
 	if d := after.Sub(before); d < 25*time.Millisecond {
@@ -58,11 +58,14 @@ func TestJSONChaff(t *testing.T) {
 		t.Errorf("wrong code, want: %v, got: %v", http.StatusOK, w.Code)
 	}
 
-	if header := w.Header().Get(Header); header == "" {
-		t.Errorf("expected header '%v' missing", Header)
-	} else {
-		checkLength(t, 100, len(header))
+	headerSize := 0
+	for k, v := range w.Header() {
+		headerSize += len(k)
+		if len(v) > 0 {
+			headerSize += len(v[0])
+		}
 	}
+	checkLength(t, 100, headerSize)
 
 	var response Example
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {

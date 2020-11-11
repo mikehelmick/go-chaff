@@ -17,22 +17,36 @@ package chaff
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"time"
+)
+
+const (
+	// Number of bytes added by the content type header for application/json
+	contentHeaderSize = uint64(31)
 )
 
 // ProduceJSONFn is a function for producing JSON responses.
 type ProduceJSONFn func(string) interface{}
 
-// JSONResponse is an HTTP handler that can wrap a tracker and response with
-// a custom JSON object.
+// The default JSON object that is returned.
+type BasicPadding struct {
+	Padding string `json:"padding"`
+}
+
+// The default ProduceJSONFn
+func PaddingWriterFn(randomData string) interface{} {
+	return &BasicPadding{
+		Padding: randomData,
+	}
+}
+
+// JSONResponder implements the Responder interface and
+// allows you to reply to chaff reqiests with a custom JSON object.
 //
-// To use, you must provide an instanciated Tracker as well as a function
+// To use a function
 // that will be given the heuristically sized payload so you can transform
 // it into the struct that you want to serialize.
-type JSONResponse struct {
-	t  *Tracker
+type JSONResponder struct {
 	fn ProduceJSONFn
 }
 
@@ -40,34 +54,38 @@ type JSONResponse struct {
 // Requres a ProduceJSONFn that will be given the random data payload
 // and is responsible for putting it into a struct that can be marshalled
 // as the JSON response.
-func NewJSONResponse(t *Tracker, fn ProduceJSONFn) *JSONResponse {
-	return &JSONResponse{t, fn}
+func NewJSONResponder(fn ProduceJSONFn) Responder {
+	return &JSONResponder{
+		fn: fn,
+	}
 }
 
-func (j *JSONResponse) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	details := j.t.CalculateProfile()
+func DefaultJSONResponder() Responder {
+	return &JSONResponder{
+		fn: PaddingWriterFn,
+	}
+}
 
+func (j *JSONResponder) Write(headerSize, bodySize uint64, w http.ResponseWriter, r *http.Request) error {
 	var bodyData []byte
 	var err error
-	if details.bodySize > 0 {
-		bodyData, err = json.Marshal(j.fn(randomData(details.bodySize)))
+	if bodySize > 0 {
+		bodyData, err = json.Marshal(j.fn(RandomData(bodySize)))
 		if err != nil {
-			log.Printf("error: unable to marshal chaff JSON response: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(w, "{\"error\": \"%v\"}", err.Error())
-			return
+			return err
 		}
 	}
 
 	w.WriteHeader(http.StatusOK)
 	// Generate the response details.
-	if details.headerSize > 0 {
-		w.Header().Add(Header, randomData(details.headerSize))
+	if headerSize > contentHeaderSize {
+		w.Header().Add(Header, RandomData(headerSize-contentHeaderSize-uint64(len(Header))))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, "%s", bodyData)
 
-	j.t.normalizeLatnecy(start, details.latencyMs)
+	return nil
 }

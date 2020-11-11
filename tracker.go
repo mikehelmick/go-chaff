@@ -149,7 +149,7 @@ func (t *Tracker) CalculateProfile() *request {
 	}
 }
 
-func randomData(size uint64) string {
+func RandomData(size uint64) string {
 	// Account for base64 overhead
 	size = 3 * size / 4
 	buffer := make([]byte, size)
@@ -165,27 +165,25 @@ func (t *Tracker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t.HandleChaff().ServeHTTP(w, r)
 }
 
-// HandleChaff is the chaff request handler. Based on the current request
-// profile the requst will be held for a certian period of time and then return
-// approximate size random data.
-func (t *Tracker) HandleChaff() http.Handler {
+func (t *Tracker) ChaffHandler(responder Responder) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		details := t.CalculateProfile()
 
-		w.WriteHeader(http.StatusOK)
-		// Generate the response details.
-		if details.headerSize > 0 {
-			w.Header().Add(Header, randomData(details.headerSize))
-		}
-		if details.bodySize > 0 {
-			if _, err := w.Write([]byte(randomData(details.bodySize))); err != nil {
-				log.Printf("chaff request failed to write: %v", err)
-			}
+		if err := responder.Write(details.headerSize, details.bodySize, w, r); err != nil {
+			log.Printf("error writing chaff response: %v", err)
 		}
 
 		t.normalizeLatnecy(start, details.latencyMs)
 	})
+}
+
+// HandleChaff is the chaff request handler. Based on the current request
+// profile the requst will be held for a certian period of time and then return
+// approximate size random data.
+func (t *Tracker) HandleChaff() http.Handler {
+	responder := &PlainResponder{}
+	return t.ChaffHandler(responder)
 }
 
 // Track wraps a http handler and collects metrics about the request for

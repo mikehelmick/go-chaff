@@ -48,6 +48,7 @@ type Tracker struct {
 	pos    int
 	ch     chan *request
 	done   chan struct{}
+	resp   Responder
 }
 
 type request struct {
@@ -66,16 +67,23 @@ func newRequest(start, end time.Time, headerSize, bodySize uint64) *request {
 
 // New creates a new tracker with the `DefaultCapacity`.
 func New() *Tracker {
-	t, _ := NewTracker(DefaultCapacity)
+	t, _ := NewTracker(&PlainResponder{}, DefaultCapacity)
 	return t
 }
 
 // NewTracker creates a tracker with custom capacity.
 // Launches a goroutine to update the request metrics.
 // To shut this down, use the .Close() method.
-func NewTracker(cap int) (*Tracker, error) {
+// The Responder parameter is used to write the output. If non is specified,
+// the tracker will default to the "PlainResponder" which just writes the raw
+// chaff bytes.
+func NewTracker(resp Responder, cap int) (*Tracker, error) {
 	if cap < 1 || cap > DefaultCapacity {
 		return nil, fmt.Errorf("cap must be 1 <= cap <= 100, got: %v", cap)
+	}
+
+	if resp == nil {
+		return nil, fmt.Errorf("responder must be non-nil")
 	}
 
 	t := &Tracker{
@@ -85,6 +93,7 @@ func NewTracker(cap int) (*Tracker, error) {
 		pos:    0,
 		ch:     make(chan *request, cap),
 		done:   make(chan struct{}),
+		resp:   resp,
 	}
 	go t.updater()
 	return t, nil
@@ -182,8 +191,7 @@ func (t *Tracker) ChaffHandler(responder Responder) http.Handler {
 // profile the requst will be held for a certian period of time and then return
 // approximate size random data.
 func (t *Tracker) HandleChaff() http.Handler {
-	responder := &PlainResponder{}
-	return t.ChaffHandler(responder)
+	return t.ChaffHandler(t.resp)
 }
 
 // Track wraps a http handler and collects metrics about the request for

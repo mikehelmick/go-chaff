@@ -15,7 +15,9 @@
 package chaff
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -109,4 +111,65 @@ func TestTracking(t *testing.T) {
 	if diff := cmp.Diff(want, got, cmp.AllowUnexported(request{})); diff != "" {
 		t.Errorf("mismatch (-want, +got):\n%s", diff)
 	}
+}
+
+func TestJSONMiddleware(t *testing.T) {
+	type result struct {
+		Name string `json:"name"`
+	}
+	jsonCount, nonJSONCount := 0, 0
+	write := func(s string) interface{} {
+		jsonCount += 1
+		d, _ := json.Marshal(result{s})
+		t.Logf("writing json: %v %v", result{s}, d)
+		return result{s}
+	}
+	tracker, err := NewTracker(NewJSONResponder(write), DefaultCapacity)
+	if err != nil {
+		t.Fatalf("error creating tracker: %v", err)
+	}
+	defer tracker.Close()
+
+	// Start the server
+	srv := httptest.NewServer(tracker.HandleTrack(HeaderDetector("X-Chaff"),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			nonJSONCount += 1
+			w.Write([]byte("HERE"))
+		})))
+	defer srv.Close()
+
+	// Send a non-chaff request.
+	t.Logf("Getting non-chaff")
+	if _, err := http.Get(srv.URL); err != nil {
+		t.Fatalf("error connecting to server %v", err)
+	} else if nonJSONCount != 1 {
+		t.Errorf("nonJSONCount = %d, expected 1", nonJSONCount)
+	} else if jsonCount != 0 {
+		t.Errorf("jsonCount = %d, expected 0", jsonCount)
+	}
+	nonJSONCount, jsonCount = 0, 0
+
+	// Send a chaff request
+	req, err := http.NewRequest("GET", srv.URL, nil)
+	if err != nil {
+		t.Fatalf("error creating request %v", err)
+	}
+	req.Header.Add("X-Chaff", "true")
+	client := http.Client{}
+	t.Logf("Getting chaff")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("error getting chaff: %v", err)
+	} else if jsonCount != 1 {
+		t.Errorf("jsonCount = %d, expected 1", jsonCount)
+	} else if nonJSONCount != 0 {
+		t.Errorf("nonJSONCount = %d, expected 0", nonJSONCount)
+	}
+	t.Logf("%v", resp.Header)
+	defer resp.Body.Close()
+	dat, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("error reading response: %v", err)
+	}
+	t.Logf(string(dat))
 }

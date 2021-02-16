@@ -28,6 +28,7 @@ import (
 const (
 	Header          = "X-Chaff"
 	DefaultCapacity = 100
+	MaxRandomBytes  = 1000000
 )
 
 // Tracker represents the status of a latency and request size tracker.
@@ -158,9 +159,17 @@ func (t *Tracker) CalculateProfile() *request {
 	}
 }
 
+// RandomData generates size bytes of random base64 data.
 func RandomData(size uint64) string {
 	// Account for base64 overhead
 	size = 3 * size / 4
+	if size <= 0 {
+		return ""
+	}
+	if size > MaxRandomBytes {
+		size = MaxRandomBytes
+	}
+
 	buffer := make([]byte, size)
 	_, err := rand.Read(buffer)
 	if err != nil {

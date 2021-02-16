@@ -79,10 +79,12 @@ func (j *JSONResponder) Write(headerSize, bodySize uint64, w http.ResponseWriter
 		}
 	}
 
+	const headerDiff = contentHeaderSize + uint64(len(Header))
+
 	w.WriteHeader(http.StatusOK)
 	// Generate the response details.
-	if headerSize > contentHeaderSize {
-		w.Header().Add(Header, RandomData(headerSize-contentHeaderSize-uint64(len(Header))))
+	if headerSize > headerDiff {
+		w.Header().Add(Header, RandomData(headerSize-headerDiff))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, "%s", bodyData)

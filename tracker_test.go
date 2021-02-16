@@ -15,6 +15,7 @@
 package chaff
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -26,6 +27,22 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestRandomData(t *testing.T) {
+	d := RandomData(0)
+	if d != "" {
+		t.Fatalf("expected empty string, got: %q", d)
+	}
+
+	d = RandomData(MaxRandomBytes * 2)
+	b, err := base64.StdEncoding.DecodeString(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := len(b); l < int(float32(MaxRandomBytes)*0.99) || l > int(float32(MaxRandomBytes)*1.01) {
+		t.Fatalf("length is outside of 1pct of expected, want: %d got: %d", MaxRandomBytes, l)
+	}
+}
 
 func checkLength(t *testing.T, expected int, length int) {
 	t.Helper()

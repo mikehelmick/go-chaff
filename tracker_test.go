@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,8 @@ import (
 )
 
 func TestRandomData(t *testing.T) {
+	t.Parallel()
+
 	d := RandomData(0)
 	if d != "" {
 		t.Fatalf("expected empty string, got: %q", d)
@@ -55,6 +58,7 @@ func checkLength(t *testing.T, expected int, length int) {
 }
 
 func TestChaff(t *testing.T) {
+	t.Parallel()
 	track := New()
 	defer track.Close()
 
@@ -88,6 +92,7 @@ func TestChaff(t *testing.T) {
 }
 
 func TestTracking(t *testing.T) {
+	t.Parallel()
 	track := New()
 	defer track.Close()
 
@@ -130,7 +135,51 @@ func TestTracking(t *testing.T) {
 	}
 }
 
+func TestMax(t *testing.T) {
+	t.Parallel()
+
+	track := New(WithMaxLatency(25))
+	defer track.Close()
+
+	var wg sync.WaitGroup
+	for i := 0; i <= DefaultCapacity*2; i++ {
+		wrapped := track.Track(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				time.Sleep(50 * time.Millisecond)
+				w.WriteHeader(http.StatusAccepted)
+				w.Header().Add("padding", strings.Repeat("a", i+1))
+				fmt.Fprintf(w, "%s", strings.Repeat("b", i+1))
+			}))
+
+		recorder := httptest.NewRecorder()
+		request, err := http.NewRequest("GET", "/", strings.NewReader(""))
+		if err != nil {
+			t.Fatalf("http.NewRequest: %v", err)
+		}
+
+		wg.Add(1)
+		go func(t *testing.T) {
+			defer wg.Done()
+			t.Helper()
+			wrapped.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusAccepted {
+				t.Fatalf("wrong error code: want: %v, got: %v", http.StatusAccepted, recorder.Code)
+			}
+		}(t)
+	}
+
+	wg.Wait()
+
+	got := track.CalculateProfile()
+	// Only checking latency
+	wantLatency := uint64(25)
+	if diff := cmp.Diff(wantLatency, got.latencyMs); diff != "" {
+		t.Errorf("mismatch (-want, +got):\n%s", diff)
+	}
+}
+
 func TestJSONMiddleware(t *testing.T) {
+	t.Parallel()
 	type result struct {
 		Name string `json:"name"`
 	}

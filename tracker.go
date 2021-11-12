@@ -42,14 +42,15 @@ const (
 // (i.e. this library is falling behind or requests volumes are too large),
 // then some individual requests will be dropped.
 type Tracker struct {
-	mu     sync.RWMutex
-	buffer []*request
-	size   int
-	cap    int
-	pos    int
-	ch     chan *request
-	done   chan struct{}
-	resp   Responder
+	mu           sync.RWMutex
+	buffer       []*request
+	size         int
+	cap          int
+	pos          int
+	ch           chan *request
+	done         chan struct{}
+	resp         Responder
+	maxLatencyMs uint64
 }
 
 type request struct {
@@ -67,9 +68,19 @@ func newRequest(start, end time.Time, headerSize, bodySize uint64) *request {
 }
 
 // New creates a new tracker with the `DefaultCapacity`.
-func New() *Tracker {
-	t, _ := NewTracker(&PlainResponder{}, DefaultCapacity)
+func New(opts ...Option) *Tracker {
+	t, _ := NewTracker(&PlainResponder{}, DefaultCapacity, opts...)
 	return t
+}
+
+// Option defines a method for applying options when configuring a new tracker.
+type Option func(*Tracker)
+
+// WithMaxLatency puts a cap on the tunnel latency.
+func WithMaxLatency(maxLatencyMs uint64) Option {
+	return func(t *Tracker) {
+		t.maxLatencyMs = maxLatencyMs
+	}
 }
 
 // NewTracker creates a tracker with custom capacity.
@@ -78,7 +89,7 @@ func New() *Tracker {
 // The Responder parameter is used to write the output. If non is specified,
 // the tracker will default to the "PlainResponder" which just writes the raw
 // chaff bytes.
-func NewTracker(resp Responder, cap int) (*Tracker, error) {
+func NewTracker(resp Responder, cap int, opts ...Option) (*Tracker, error) {
 	if cap < 1 || cap > DefaultCapacity {
 		return nil, fmt.Errorf("cap must be 1 <= cap <= 100, got: %v", cap)
 	}
@@ -88,14 +99,21 @@ func NewTracker(resp Responder, cap int) (*Tracker, error) {
 	}
 
 	t := &Tracker{
-		buffer: make([]*request, 0, int(cap)),
-		size:   0,
-		cap:    cap,
-		pos:    0,
-		ch:     make(chan *request, cap),
-		done:   make(chan struct{}),
-		resp:   resp,
+		buffer:       make([]*request, 0, int(cap)),
+		size:         0,
+		cap:          cap,
+		pos:          0,
+		ch:           make(chan *request, cap),
+		done:         make(chan struct{}),
+		resp:         resp,
+		maxLatencyMs: 0,
 	}
+
+	// Apply options.
+	for _, opt := range opts {
+		opt(t)
+	}
+
 	go t.updater()
 	return t, nil
 }
@@ -152,8 +170,13 @@ func (t *Tracker) CalculateProfile() *request {
 	}
 	divisor := uint64(t.size)
 
+	latencyMs := latency / divisor
+	if max := t.maxLatencyMs; max > 0 && latencyMs > max {
+		latencyMs = max
+	}
+
 	return &request{
-		latencyMs:  latency / divisor,
+		latencyMs:  latencyMs,
 		headerSize: uint64(hSize / divisor),
 		bodySize:   uint64(bSize / divisor),
 	}

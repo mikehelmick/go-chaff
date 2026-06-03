@@ -72,21 +72,24 @@ func (j *JSONResponder) Write(headerSize, bodySize uint64, w http.ResponseWriter
 	if bodySize > 0 {
 		bodyData, err = json.Marshal(j.fn(RandomData(bodySize)))
 		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
+			// Headers must be set before WriteHeader. Avoid reflecting the raw
+			// error into the response body to prevent leaking internal details.
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, "{\"error\": \"%v\"}", err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error": "internal server error"}`)
 			return err
 		}
 	}
 
 	const headerDiff = contentHeaderSize + uint64(len(Header))
 
-	w.WriteHeader(http.StatusOK)
-	// Generate the response details.
+	// Generate the response details. Headers must be set before WriteHeader is
+	// called, otherwise they are silently dropped by the http.ResponseWriter.
 	if headerSize > headerDiff {
 		w.Header().Add(Header, RandomData(headerSize-headerDiff))
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "%s", bodyData)
 
 	return nil

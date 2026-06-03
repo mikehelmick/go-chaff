@@ -51,6 +51,7 @@ type Tracker struct {
 	done         chan struct{}
 	resp         Responder
 	maxLatencyMs uint64
+	closeOnce    sync.Once
 }
 
 type request struct {
@@ -145,11 +146,17 @@ func (t *Tracker) updater() {
 	}
 }
 
-// Close will stop the updating goroutine and closes all channels.
+// Close stops the updating goroutine. It is safe to call Close multiple times
+// and safe to call concurrently with in-flight tracked requests.
+//
+// The request channel is intentionally not closed: request handlers are the
+// senders, and closing it from here could cause a "send on closed channel"
+// panic for a request that is still being recorded. Closing the done channel
+// is sufficient to terminate the updater goroutine.
 func (t *Tracker) Close() {
-	t.done <- struct{}{}
-	close(t.ch)
-	close(t.done)
+	t.closeOnce.Do(func() {
+		close(t.done)
+	})
 }
 
 // CalculateProfile takes a read lock over the source data and
@@ -268,10 +275,14 @@ func (t *Tracker) HandleTrack(d Detector, next http.Handler) http.Handler {
 }
 
 func (t *Tracker) normalizeLatnecy(start time.Time, targetMs uint64) {
-	elapsed := time.Since(start)
-	if rem := targetMs - uint64(elapsed.Milliseconds()); rem > 0 {
-		time.Sleep(time.Duration(rem) * time.Millisecond)
+	elapsedMs := uint64(time.Since(start).Milliseconds())
+	// If the response already took longer than the target latency there is
+	// nothing to do. Guard against unsigned integer underflow before computing
+	// the remaining sleep duration.
+	if elapsedMs >= targetMs {
+		return
 	}
+	time.Sleep(time.Duration(targetMs-elapsedMs) * time.Millisecond)
 }
 
 // write through wraps an http.ResponseWriter so that we can count the number of

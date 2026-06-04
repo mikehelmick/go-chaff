@@ -1,6 +1,8 @@
 module github.com/mikehelmick/go-chaff/example
 
-go 1.23
+go 1.26.0
+
+toolchain go1.26.4
 
 require (
 	github.com/gorilla/handlers v1.5.2

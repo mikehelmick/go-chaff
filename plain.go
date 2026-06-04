@@ -20,11 +20,12 @@ type PlainResponder struct {
 }
 
 func (pr *PlainResponder) Write(headerSize, bodySize uint64, w http.ResponseWriter, r *http.Request) error {
-	w.WriteHeader(http.StatusOK)
-	// Generate the response details.
+	// Generate the response details. Headers must be set before WriteHeader is
+	// called, otherwise they are silently dropped by the http.ResponseWriter.
 	if headerSize > 0 {
 		w.Header().Add(Header, RandomData(headerSize))
 	}
+	w.WriteHeader(http.StatusOK)
 	if bodySize > 0 {
 		if _, err := w.Write([]byte(RandomData(bodySize))); err != nil {
 			return err

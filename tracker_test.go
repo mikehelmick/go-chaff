@@ -163,7 +163,7 @@ func TestMax(t *testing.T) {
 			t.Helper()
 			wrapped.ServeHTTP(recorder, request)
 			if recorder.Code != http.StatusAccepted {
-				t.Fatalf("wrong error code: want: %v, got: %v", http.StatusAccepted, recorder.Code)
+				t.Errorf("wrong error code: want: %v, got: %v", http.StatusAccepted, recorder.Code)
 			}
 		}(t)
 	}
@@ -175,6 +175,55 @@ func TestMax(t *testing.T) {
 	wantLatency := uint64(25)
 	if diff := cmp.Diff(wantLatency, got.latencyMs); diff != "" {
 		t.Errorf("mismatch (-want, +got):\n%s", diff)
+	}
+}
+
+// TestChaffHeaderDelivered exercises the chaff handler through a real HTTP
+// server (rather than httptest.ResponseRecorder, which mutates the header map
+// in place even after WriteHeader). This ensures the chaff header is actually
+// flushed to the client, which is essential for chaff responses to be
+// indistinguishable from real traffic.
+func TestChaffHeaderDelivered(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		resp        Responder
+		contentType string
+	}{
+		{"plain", &PlainResponder{}, ""},
+		{"json", DefaultJSONResponder(), "application/json"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			track, err := NewTracker(tc.resp, DefaultCapacity)
+			if err != nil {
+				t.Fatalf("NewTracker: %v", err)
+			}
+			defer track.Close()
+
+			// Seed with a request that has non-trivial header and body sizes.
+			track.recordRequest(&request{1, 250, 100})
+
+			srv := httptest.NewServer(track.HandleChaff())
+			defer srv.Close()
+
+			resp, err := http.Get(srv.URL)
+			if err != nil {
+				t.Fatalf("http.Get: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if got := resp.Header.Get(Header); got == "" {
+				t.Errorf("chaff header %q was not delivered to the client", Header)
+			}
+			if tc.contentType != "" {
+				if got := resp.Header.Get("Content-Type"); got != tc.contentType {
+					t.Errorf("Content-Type = %q, want %q", got, tc.contentType)
+				}
+			}
+		})
 	}
 }
 

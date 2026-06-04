@@ -15,9 +15,11 @@
 package chaff
 
 import (
+	"compress/gzip"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sync"
@@ -52,6 +54,13 @@ type Tracker struct {
 	resp         Responder
 	maxLatencyMs uint64
 	closeOnce    sync.Once
+
+	// estimateCompression, when true, causes the tracker to record the
+	// estimated compressed size of real response bodies instead of their raw
+	// size. gzipPool holds reusable gzip writers configured at gzipLevel.
+	estimateCompression bool
+	gzipLevel           int
+	gzipPool            sync.Pool
 }
 
 type request struct {
@@ -84,6 +93,31 @@ func WithMaxLatency(maxLatencyMs uint64) Option {
 	}
 }
 
+// WithBodyCompression makes the tracker record the estimated *compressed* size
+// of real response bodies instead of their raw size, using gzip at the given
+// level (one of the compress/gzip level constants).
+//
+// This is useful when responses are compressed by a component the tracker
+// cannot observe directly, such as a reverse proxy or CDN. In that case the raw
+// body size overstates what an observer sees on the wire, and because chaff
+// payloads are high-entropy (incompressible) data, chaff responses would be
+// conspicuously larger than real, compressible responses. Sizing chaff to the
+// estimated compressed size keeps the two indistinguishable on the wire.
+//
+// The estimation runs while the wrapped handler executes, so its CPU cost is
+// included in the tracked request latency and is therefore replayed for chaff
+// responses. It adds CPU overhead to every tracked request, so it is opt-in.
+// The estimate is only as good as the configured level matches the downstream
+// compressor; header compression (e.g. HTTP/2 HPACK) is not modeled.
+//
+// NewTracker returns an error if level is not a valid gzip level.
+func WithBodyCompression(level int) Option {
+	return func(t *Tracker) {
+		t.estimateCompression = true
+		t.gzipLevel = level
+	}
+}
+
 // NewTracker creates a tracker with custom capacity.
 // Launches a goroutine to update the request metrics.
 // To shut this down, use the .Close() method.
@@ -113,6 +147,19 @@ func NewTracker(resp Responder, cap int, opts ...Option) (*Tracker, error) {
 	// Apply options.
 	for _, opt := range opts {
 		opt(t)
+	}
+
+	if t.estimateCompression {
+		// Validate the level once up front so the pool factory below can safely
+		// ignore the error.
+		if _, err := gzip.NewWriterLevel(io.Discard, t.gzipLevel); err != nil {
+			return nil, fmt.Errorf("invalid compression level: %w", err)
+		}
+		level := t.gzipLevel
+		t.gzipPool.New = func() interface{} {
+			gz, _ := gzip.NewWriterLevel(io.Discard, level)
+			return gz
+		}
 	}
 
 	go t.updater()
@@ -253,8 +300,11 @@ func (t *Tracker) HandleTrack(d Detector, next http.Handler) http.Handler {
 
 		// Handle the real request, gathering metadata
 		start := time.Now()
-		proxyWriter := &writeThrough{w: w}
+		proxyWriter := t.newWriteThrough(w)
 		next.ServeHTTP(proxyWriter, r)
+		// finalize before stamping end so any compression-estimation cost
+		// (including the final gzip flush) is part of the recorded latency.
+		bodySize := proxyWriter.finalize()
 		end := time.Now()
 
 		// Grab the size of the headers that are present.
@@ -268,7 +318,7 @@ func (t *Tracker) HandleTrack(d Detector, next http.Handler) http.Handler {
 
 		// Save metadata
 		select {
-		case t.ch <- newRequest(start, end, headerSize, proxyWriter.Size()):
+		case t.ch <- newRequest(start, end, headerSize, bodySize):
 		default: // channel full, drop request.
 		}
 	})
@@ -285,11 +335,41 @@ func (t *Tracker) normalizeLatnecy(start time.Time, targetMs uint64) {
 	time.Sleep(time.Duration(targetMs-elapsedMs) * time.Millisecond)
 }
 
+// countWriter is an io.Writer that only counts the bytes written to it. It is
+// used as the sink for the compression estimator.
+type countWriter struct {
+	n uint64
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	c.n += uint64(len(p))
+	return len(p), nil
+}
+
 // write through wraps an http.ResponseWriter so that we can count the number of
 // bytes that are written by the delegate handler.
+//
+// When the owning tracker has compression estimation enabled, writes are also
+// teed through gz (whose output lands in counter) so finalize can report the
+// estimated compressed body size.
 type writeThrough struct {
-	size uint64
-	w    http.ResponseWriter
+	size    uint64
+	w       http.ResponseWriter
+	t       *Tracker
+	gz      *gzip.Writer
+	counter *countWriter
+}
+
+// newWriteThrough builds a writeThrough for w, wiring up the compression
+// estimator if the tracker is configured for it.
+func (t *Tracker) newWriteThrough(w http.ResponseWriter) *writeThrough {
+	wt := &writeThrough{w: w, t: t}
+	if t.estimateCompression {
+		wt.counter = &countWriter{}
+		wt.gz = t.gzipPool.Get().(*gzip.Writer)
+		wt.gz.Reset(wt.counter)
+	}
+	return wt
 }
 
 func (wt *writeThrough) Header() http.Header {
@@ -298,13 +378,37 @@ func (wt *writeThrough) Header() http.Header {
 
 func (wt *writeThrough) Write(b []byte) (int, error) {
 	atomic.AddUint64(&wt.size, uint64(len(b)))
+	if wt.gz != nil {
+		// Best-effort estimate only: an error here affects the size estimate,
+		// not the response that is actually sent, so it is intentionally
+		// ignored.
+		_, _ = wt.gz.Write(b)
+	}
 	return wt.w.Write(b)
+}
+
+// finalize flushes the compression estimator (if any) and returns the body
+// size to record. When compression is estimated, it returns the smaller of the
+// raw and compressed sizes (a real compressor never enlarges a payload),
+// otherwise it returns the raw byte count.
+//
+// It must be called before the request latency is stamped so that the final
+// gzip flush is attributed to request latency.
+func (wt *writeThrough) finalize() uint64 {
+	raw := atomic.LoadUint64(&wt.size)
+	if wt.gz == nil {
+		return raw
+	}
+	_ = wt.gz.Close()
+	compressed := wt.counter.n
+	wt.t.gzipPool.Put(wt.gz)
+	wt.gz = nil
+	if compressed < raw {
+		return compressed
+	}
+	return raw
 }
 
 func (wt *writeThrough) WriteHeader(statusCode int) {
 	wt.w.WriteHeader(statusCode)
-}
-
-func (wt *writeThrough) Size() uint64 {
-	return atomic.LoadUint64(&wt.size)
 }

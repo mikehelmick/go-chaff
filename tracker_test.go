@@ -15,6 +15,7 @@
 package chaff
 
 import (
+	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -224,6 +226,68 @@ func TestChaffHeaderDelivered(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestBodyCompressionEstimate verifies that, with WithBodyCompression enabled,
+// the recorded body size reflects the compressed size of a compressible
+// response rather than its raw size, while the raw byte count is still
+// observed.
+func TestBodyCompressionEstimate(t *testing.T) {
+	t.Parallel()
+
+	track, err := NewTracker(&PlainResponder{}, DefaultCapacity, WithBodyCompression(gzip.BestCompression))
+	if err != nil {
+		t.Fatalf("NewTracker: %v", err)
+	}
+	defer track.Close()
+
+	// Highly compressible body.
+	body := []byte(strings.Repeat("a", 4096))
+
+	wt := track.newWriteThrough(httptest.NewRecorder())
+	if _, err := wt.Write(body); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	recorded := wt.finalize()
+
+	if recorded == 0 || recorded >= uint64(len(body)) {
+		t.Errorf("recorded body size = %d, want compressed size in (0, %d)", recorded, len(body))
+	}
+	if raw := atomic.LoadUint64(&wt.size); raw != uint64(len(body)) {
+		t.Errorf("raw size = %d, want %d", raw, len(body))
+	}
+}
+
+// TestBodyCompressionIncompressible verifies that for incompressible data the
+// recorded size never exceeds the raw size (a real compressor would send the
+// payload uncompressed rather than enlarge it).
+func TestBodyCompressionIncompressible(t *testing.T) {
+	t.Parallel()
+
+	track, err := NewTracker(&PlainResponder{}, DefaultCapacity, WithBodyCompression(gzip.BestSpeed))
+	if err != nil {
+		t.Fatalf("NewTracker: %v", err)
+	}
+	defer track.Close()
+
+	// RandomData is high-entropy and will not compress.
+	body := []byte(RandomData(4096))
+
+	wt := track.newWriteThrough(httptest.NewRecorder())
+	if _, err := wt.Write(body); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if recorded := wt.finalize(); recorded > uint64(len(body)) {
+		t.Errorf("recorded body size = %d, want <= raw size %d", recorded, len(body))
+	}
+}
+
+func TestWithBodyCompressionInvalidLevel(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewTracker(&PlainResponder{}, DefaultCapacity, WithBodyCompression(99)); err == nil {
+		t.Error("expected error for invalid compression level, got nil")
 	}
 }
 

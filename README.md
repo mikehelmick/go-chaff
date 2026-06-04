@@ -51,3 +51,39 @@ There are two components:
     mux.Handle("/", tracker.Track())
     mux.Handle("/chaff", tracker.HandleChaff())
     ```
+
+## Compression considerations
+
+The tracker makes chaff responses match the **size** of real responses. A
+network observer, however, sees the size of bytes *on the wire*, which is the
+post-compression size if compression is in use. Because chaff payloads are
+high-entropy (and therefore effectively incompressible) random data, this can
+make chaff distinguishable from real, compressible responses unless the tracker
+measures the same size the observer sees. Where compression happens matters:
+
+- **Compression below the tracker** (the tracker is the outermost middleware,
+  with a compression handler beneath it): the tracker already records the
+  compressed size, and chaff matches it. This is the recommended ordering.
+- **Compression above the tracker** (a compression middleware wraps the
+  tracker): the tracker records the uncompressed size and chaff is
+  distinguishable. Reorder so the tracker is outermost.
+- **Compression outside the process** (a reverse proxy, load balancer, or CDN):
+  the application never observes the compressed size. Either disable compression
+  for chaff-serving endpoints, or enable compressed-size estimation (below).
+
+### Estimating the compressed size
+
+When responses are compressed by a component the tracker cannot observe (such as
+a reverse proxy or CDN), use the `WithBodyCompression` option so the tracker
+records the estimated compressed body size instead of the raw size:
+
+```go
+tracker, err := chaff.NewTracker(chaff.DefaultJSONResponder(), chaff.DefaultCapacity,
+    chaff.WithBodyCompression(gzip.DefaultCompression))
+```
+
+The estimation runs while the wrapped handler executes, so its CPU cost is
+captured in the tracked request latency and replayed for chaff responses. It
+adds CPU overhead to every tracked request (hence it is opt-in), and is only as
+accurate as the configured gzip level matches the downstream compressor; header
+compression (e.g. HTTP/2 HPACK) is not modeled.

@@ -84,6 +84,11 @@ tracker, err := chaff.NewTracker(chaff.DefaultJSONResponder(), chaff.DefaultCapa
 
 The estimation runs while the wrapped handler executes, so its CPU cost is
 captured in the tracked request latency and replayed for chaff responses. It
-adds CPU overhead to every tracked request (hence it is opt-in), and is only as
-accurate as the configured gzip level matches the downstream compressor; header
-compression (e.g. HTTP/2 HPACK) is not modeled.
+adds CPU overhead to every tracked request (hence it is opt-in).
+
+This is an approximation rather than an exact match. Its accuracy depends on the
+configured gzip level matching the downstream compressor, header compression
+(e.g. HTTP/2 HPACK) is not modeled, and because chaff bodies are base64-encoded
+they remain slightly compressible (so a downstream compressor shrinks them a
+little). In practice it brings chaff to within roughly 10–15% of real responses
+on the wire, compared to several times larger when left uncorrected.

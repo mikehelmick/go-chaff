@@ -107,8 +107,13 @@ func WithMaxLatency(maxLatencyMs uint64) Option {
 // The estimation runs while the wrapped handler executes, so its CPU cost is
 // included in the tracked request latency and is therefore replayed for chaff
 // responses. It adds CPU overhead to every tracked request, so it is opt-in.
-// The estimate is only as good as the configured level matches the downstream
-// compressor; header compression (e.g. HTTP/2 HPACK) is not modeled.
+//
+// This is an approximation, not an exact match: the estimate is only as good as
+// the configured level matches the downstream compressor, header compression
+// (e.g. HTTP/2 HPACK) is not modeled, and because chaff bodies are base64 they
+// remain slightly compressible, so a downstream compressor shrinks them a
+// little. In practice this brings chaff to within roughly 10-15% of real
+// responses on the wire (versus several times larger when uncorrected).
 //
 // NewTracker returns an error if level is not a valid gzip level.
 func WithBodyCompression(level int) Option {

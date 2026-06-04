@@ -1,7 +1,7 @@
 module github.com/mikehelmick/go-chaff
 
-go 1.23
+go 1.26.0
 
-toolchain go1.24.7
+toolchain go1.26.4
 
 require github.com/google/go-cmp v0.7.0

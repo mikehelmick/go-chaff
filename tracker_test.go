@@ -350,5 +350,5 @@ func TestJSONMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error reading response: %v", err)
 	}
-	t.Logf(string(dat))
+	t.Logf("%s", string(dat))
 }
